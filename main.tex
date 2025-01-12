@@ -1,0 +1,512 @@
+\documentclass{article}
+\usepackage[utf8]{inputenc}
+\usepackage{amsmath,amssymb}
+\usepackage{hyperref}
+\usepackage{xurl}
+\usepackage[nottoc]{tocbibind}
+
+\title{Generalized Bulletproofs code audit}
+\author{Cypher Stack\thanks{\url{https://cypherstack.com}}}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+This report describes the findings of a code audit of a Generalized Bulletproofs implementation intended for use in Monero.
+It reflects a limited scope and represents a best effort; as with any review or audit, it cannot guarantee that any protocol or implementation is suitably secure for a particular use case, nor that the contents of this report reflect all issues or vulnerabilities that may exist.
+The author asserts no warranty and disclaims liability for its use.
+The author further expresses no endorsement of any kind.
+This report has not undergone any further formal or peer review.
+
+\tableofcontents
+
+
+\section{Summary}
+
+Generalized Bulletproofs are a cryptographic construction designed for use in Curve Trees \cite{ct}, themselves used in a full-chain membership proof construction intended for deployment as a Monero protocol upgrade.
+The construction of Generalized Bulletproofs (as the name implies) generalizes the arithmetic circuit satisfiability protocol of Bulletproofs \cite{bp} to support Pedersen vector commitments.
+The protocol has previously been formalized and analyzed for security\footnote{\url{https://github.com/cypherstack/generalized-bulletproofs/releases/tag/final}}.
+This report represents an audit of an implementation of Generalized Bulletproofs\footnote{\url{https://github.com/kayabaNerve/fcmp-plus-plus/tree/develop/crypto/generalized-bulletproofs}} at commit \href{https://github.com/kayabaNerve/fcmp-plus-plus/commit/7d972e2b16fe57f4dfa4a9549d2fbb9306411704}{\texttt{7d972e2}}.
+
+The following were identified as goals for this audit:
+\begin{itemize}
+\item Assert that implementations of external specifications or protocols are done correctly
+\item Determine if malicious or unintended edge cases can be exploited
+\item Identify cases where the code may panic unexpectedly
+\item Note situations where documentation is insufficient to convey intent or design
+\item Ensure that secret data is handled as safely as is feasible with respect to memory clearing and constant-time operations
+\item Identify areas of the implementation where efficiency gains are possible and reasonable
+\item Determine the extent to which the implementation contains relevant and comprehensive tests
+\end{itemize}
+
+Overall, we find that the implementation is well written and appears suitable for its intended purpose.
+We identified an issue wherein the implementation uses polynomial indexing (accompanied by witness and weighting matrix restrictions) that does not match the proving system specification.
+However, we were able to modify the specification in the technical note to account for the discrepancy, and proved it secure\footnote{\url{https://github.com/cypherstack/generalized-bulletproofs/releases/tag/implementation}}.
+As a result, we did not identify any outstanding issues of specific immediate concern.
+Consequently, this report primarily addresses areas of potential improvement.
+These deal with inconsistencies, documentation, tests, or areas of the codebase where fixes or changes could mitigate future issues.
+
+However, we carefully note that we do not assign severity ratings to the issues contained herein.
+Such ratings are often subjective, and typically depend on the ease or difficulty of triggering specific behavior, which can be challenging to assess in a consistent way.
+
+
+\section{General}
+
+\subsection{Random number generation trait bound}
+
+The codebase uses the trait bound \texttt{CryptoRng + RngCore} for cryptographically-secure random number generation.
+This is sufficient for the desired purpose; however, it is also possible to use the combined trait bound \texttt{CryptoRngCore} (supplied by \texttt{rand\_core}) instead.
+This may be desirable to reduce the risk of neglecting the \texttt{CryptoRng} trait bound, as well as to more directly signal the intention of the bound.
+
+
+\section{\texttt{lib.rs}}
+
+\subsection{Power-of-two padding}
+
+The codebase introduces a utility function \texttt{padded\_power\_of\_2} to compute the nearest greater power of two to a given index.
+The function appears to perform its task; however, it can be replaced by the standard library method \texttt{usize::checked\_next\_power\_of\_two} for simplicity and robustness.
+
+
+\subsection{Generator index panic}
+
+The methods \texttt{ProofGenerators::g\_bold} and \texttt{ProofGenerators::h\_bold} can panic if the supplied index is out of bounds.
+It may be prudent to use a checked variant for these methods to avoid a panic.
+
+
+\subsection{Unnecessary reallocation}
+
+The method \texttt{PedersenVectorCommitment::commit} unnecessarily reallocates an internal vector due to iterating over input values.
+Since the number of input values is known at runtime, this can be avoided by allocating this vector to the appropriate size.
+
+
+\subsection{Missing unit tests}
+
+No unit tests are provided.
+These may be particularly relevant for commitment-related operations.
+
+
+\subsection{Generators must be independent}
+
+It is a requirement of the Generalized Bulletproofs protocol that certain generators used in proofs be independent.
+That is, they should have no nontrivial efficiently-computable discrete logarithm representation.
+In particular, all generators represented by \texttt{ProofGenerators} must be independent.
+
+The \texttt{ProofGenerators} constructor \texttt{new} takes proposed generators as input, and therefore cannot assert their independence.
+It would be helpful for its documentation to make this requirement clear, as protocol soundness depends critically on it.
+
+
+\section{\texttt{point\_vector.rs}}
+
+\subsection{Commented-out methods}
+
+The following \texttt{PointVector} methods are commented out with no explanation:
+\begin{itemize}
+    \item \texttt{add}
+    \item \texttt{sub}
+    \item \texttt{mul}
+    \item \texttt{add\_vec}
+    \item \texttt{sub\_vec}
+    \item \texttt{multiexp\_vartime}
+    \item \texttt{sum}
+\end{itemize}
+
+
+\subsection{Missing documentation}
+
+The following \texttt{PointVector} methods lack documentation:
+\begin{itemize}
+    \item \texttt{mul\_vec}
+    \item \texttt{multiexp}
+    \item \texttt{len}
+    \item \texttt{split}
+\end{itemize}
+
+
+\subsection{Assertions}
+
+The \texttt{PointVector} methods \texttt{mul\_vec} and \texttt{multiexp} contain debug assertions relating to input values.
+These relate to assumptions on the corresponding values that are not documented and will not be caught in production.
+
+The \texttt{PointVector} method \texttt{split} contains an assertion on the underlying vector length that is not documented.
+
+
+\subsection{Missing unit tests}
+
+No unit tests are provided.
+These may be particularly relevant for arithmetic operations.
+
+
+\section{\texttt{scalar\_vector.rs}}
+
+\subsection{Commented-out method}
+
+The \texttt{PointVector} method \texttt{sum} is commented out with no explanation.
+
+
+\subsection{Missing documentation}
+
+The following \texttt{ScalarVector} methods lack documentation:
+\begin{itemize}
+    \item \texttt{powers}
+    \item \texttt{inner\_product}
+    \item \texttt{split}
+\end{itemize}
+
+
+\subsection{Assertions}
+
+The \texttt{ScalarVector} methods \texttt{inner\_product} and \texttt{split} contains debug assertions relating to input values that are not documented and will not be caught in production.
+
+The \texttt{ScalarVector} methods \texttt{add}, \texttt{sub}, \texttt{mul}, \texttt{powers}, and \texttt{split} contain assertions that are not documented.
+
+
+\subsection{Missing unit tests}
+
+No unit tests are provided.
+These may be particularly relevant for arithmetic operations.
+
+
+\section{\texttt{transcript.rs}}
+
+\subsection{Vector length panics}
+
+When encoding vector lengths for the \texttt{Transcript} method \texttt{write\_commitments} and \texttt{VerifierTranscript} method \texttt{read\_commitments}, it is possible for the methods to panic if any vector length exceeds \texttt{u32} bounds.
+
+
+\subsection{Proof serialization is malleable and not canonical}
+
+When conducting verification of a serialized proof associated to an \texttt{IpStatement} or \texttt{ArithmeticCircuitStatement}, the implementation builds and processes a transcript using the \texttt{VerifierTranscript} construction as it reads proof elements from a supplied byte slice.
+
+Presumably to better support composition, the verifier does not require that the supplied slice be empty after all required proof elements are read.
+This means that depending on higher-level handling, byte-serialized proofs can be malleable and are not canonical.
+It should be carefully checked that all such handling accounts for this.
+
+
+\subsection{Missing documentation}
+
+The following \texttt{Transcript} methods lack documentation:
+\begin{itemize}
+    \item \texttt{push\_scalar}
+    \item \texttt{push\_point}
+\end{itemize}
+
+The following \texttt{VerifierTranscript} methods lack documentation:
+\begin{itemize}
+    \item \texttt{read\_scalar}
+    \item \texttt{read\_point}
+\end{itemize}
+
+
+\subsection{Missing unit tests}
+
+No unit tests are provided.
+These may be particularly relevant for testing the relationship between \texttt{Transcript} and \texttt{VerifierTranscript}.
+
+
+\section{\texttt{lincomb.rs}}
+
+\subsection{Unused zeroization}
+
+The implementation of \texttt{Zeroize} for \texttt{Variable} appears to be unused within the codebase, and does not perform any action.
+This may have been intended to handle the case where a higher-level construction uses \texttt{Variable} and itself derives \texttt{Zeroize}.
+In this case, the user might assume or require zeroization from \texttt{Variable} that is not occurring, which violates the intent of the trait.
+
+Fortunately, it is possible to use the \texttt{\#[zeroize(skip)]} attribute for higher-level constructions requiring \texttt{Zeroize} derived support and which use \texttt{Variable}.
+Using this obviates the need for the implementation in the codebase.
+This approach is recommended in order to ensure user expectations are understood and met.
+
+\subsection{Missing documentation}
+
+The following \texttt{LinComb} methods lack documentation:
+\begin{itemize}
+    \item \texttt{add}
+    \item \texttt{sub}
+    \item \texttt{mul}
+\end{itemize}
+
+The function \texttt{accumulate\_vector} also lacks documentation.
+
+We note that the aforementioned arithmetic operations on \texttt{LinComb} are implementations of existing traits.
+However, their design is subtle and warrants careful documentation.
+
+
+\subsection{Vector accumulation can panic}
+
+The \texttt{accumulate\_vector} function will panic if the input \texttt{values} vector references an \texttt{accumulator} index that is out of bounds.
+
+
+\section{\texttt{inner\_product.rs}}
+
+\subsection{Unnecessary padding algorithm}
+
+The \texttt{IpWitness} method \texttt{new} pads the input vectors to the nearest power of two using zero scalars.
+The implementation is correct, but is unnecessary.
+It is possible simply to use \texttt{Vec::resize} instead, which resizes a vector with specified padding.
+
+
+\subsection{Nitpicky error naming}
+
+The \texttt{IpError} enumeration variant \texttt{IncorrectAmountOfGenerators} should more correctly be named \texttt{IncorrectNumberOfGenerators}, but this is very nitpicky.
+
+
+\subsection{Confusing notation}
+
+In \texttt{IpStatement}, the member \texttt{u} is specified to be a discrete logarithm against a curve group generator \texttt{G}.
+Later, in the \texttt{prove} method, this is redefined to be a group element formed by multiplying \texttt{u} by \texttt{G}.
+Because this is presumably intended to (roughly) match the protocol specified by the Generalized Bulletproofs technical note, this notation should be modified for clarity.
+
+
+\subsection{Unnecessary vector length computations}
+
+In the \texttt{IpStatement} method \texttt{prove}, the value \texttt{n\_hat} is computed as a vector length.
+When subsequently allocating the \texttt{L\_terms}, \texttt{R\_terms}, \texttt{g\_bold}, and \texttt{h\_bold} vectors, this length is recomputed unnecessarily.
+
+
+\subsection{Verification assumes generator consistency}
+
+When queueing the proof associated to an \texttt{IpStatement} for batch verification, the \texttt{verify} method does not check that the generators are consistent between proofs, and any such requirement is not documented.
+
+
+\subsection{Verification does not check for zero weight}
+
+When queueing the proof associated to an \texttt{IpStatement} for batch verification, the \texttt{verify} method applies a supplied weight to corresponding terms.
+It is required by the protocol that this weight be nonzero and sampled uniformly at random by the verifier.
+If the weight is zero, verification of the associated proof is bypassed.
+While random sampling cannot be asserted internally, the method does not check that the weight is nonzero.
+It would be easy and prudent to check this.
+
+
+\subsection{Unclear algorithm}
+
+In the Bulletproofs preprint\footnote{\url{https://eprint.iacr.org/2017/1066}}, the given inner-product argument is for the following relation:
+$$\left\{ \vec{G}, \vec{H}, U, P ; (\vec{a}, \vec{b}) : P = \vec{a} \vec{G} + \vec{b} \vec{H} + \langle \vec{a}, \vec{b} \rangle U \right\}$$
+Here we use additive notation for clarity.
+Capital letters denote elements or vectors in the group $\mathbb{G}$, and lowercase letters denote elements or vectors in the corresponding scalar field $\mathbb{F}$.
+
+The implementation effectively performs a slight modification intended to accommodate the specific requirements of the arithmetic circuit satisfiability proving system used in Generalized Bulletproofs, which is for the following protocol:
+$$\left\{ \vec{G}, \vec{H}, P, c ; (\vec{a}, \vec{b}) : P = \vec{a} \vec{G} + \vec{b} \vec{H}, c = \langle \vec{a}, \vec{b} \rangle \right\}$$
+Instantiating an argument for the former protocol using the latter requires sampling $U$ and a separate scalar $x$ in specific ways.
+
+Of note is that the batch verification queueing functionality in \texttt{verify} does not process the value $P$ in the protocol, leaving this to the caller to handle.
+Using informal notation from the preprint, the queueing functionality adds a weighting of the linear combination
+$$\sum_j \left( x_j^2 L_j + x_j^{-2} R_j \right) - a \vec{s} \vec{G} - b \vec{s}^{-1} \vec{H} - a b x U$$
+to the batch verifier, which (in a correct proof) precisely yields the corresponding weighting of $-P$.
+
+This is handled correctly in the Generalized Bulletproofs arithmetic circuit satisfiability implementation, but is poorly documented here.
+Specifically, it means that the implementation here is not itself a self-contained verifier for the protocol, which might not be immediately clear to other implementers.
+
+
+\subsection{Denial of service}
+
+When queueing the proof associated to an \texttt{IpStatement} for batch verification, the \texttt{verify} method performs computations on round challenges prior to reading the values $a$ and $b$ from the transcript.
+
+This means that a malicious prover could supply invalid values that should immediately fail verification, but which force the verifier to perform unnecessary computations.
+
+Such a minor denial-of-service can be avoided by reading the entire transcript prior to performing round challenge computations.
+
+
+\subsection{Possibly confusing verifier naming}
+
+The verification functionality performed by the \texttt{IpStatement} method \texttt{verify}, as documented, does not itself perform proof verification; instead, it adds a semantically-valid proof to a batch verifier for later verification.
+
+Despite its documentation, the naming of this method may imply to an implementer that a non-error return indicates a valid proof, the result of which could be catastrophic.
+A more clear name like \texttt{queue} may provide an extra layer of protection against this.
+
+
+\section{\texttt{arithmetic\_circuit\_proof.rs}}
+
+\subsection{Manual zeroization}
+
+The \texttt{Zeroize} trait is manually implemented for \texttt{ArithmeticCircuitStatement} against all members except for the generators, which are presumably public and global.
+This is implemented correctly, but is brittle against future member changes.
+
+One option is to derive \texttt{Zeroize} and use the \texttt{\#[zeroize(skip)]} attribute against the generators.
+Another is to use destructuring prior to member zeroization.
+
+
+\subsection{Nitpicky error naming}
+
+The \texttt{AcError} enumeration variant \texttt{InconsistentAmountOfConstraints} should more correctly be named \texttt{InconsistentNumberOfConstraints}, but this is very nitpicky.
+
+
+\subsection{Missing documentation}
+
+The \texttt{ArithmeticCircuitStatement} method \texttt{yz\_challenges} lacks documentation
+
+We note that this method is private and is only called with inputs that are produced as nonzero transcript challenges.
+It may be prudent to note this, since the method can otherwise panic due to attempted zero inversion.
+
+
+\subsection{Verifier weights can be zero}
+
+When queueing the proof associated to an \texttt{ArithmeticCircuitStatement} for batch verification, the \texttt{verify} method applies weights to corresponding terms.
+It is required by the protocol that these weights be nonzero and sampled uniformly at random by the verifier.
+If any weight is zero, verification of the associated proof is bypassed.
+
+The weights are sampled uniformly at random, but may be zero either negligibly or due to an internal failure.
+It is easy to check that this is not the case, which would also make the intent clear in code.
+
+
+\subsection{Unnecessary padding algorithm}
+
+The \texttt{ArithmeticCircuitStatement} method \texttt{prove} pads witness vectors to the nearest power of two using zero scalars.
+The implementation is correct, but is unnecessary.
+It is possible simply to use \texttt{Vec::resize} instead, which resizes a vector with specified padding.
+
+
+\subsection{Witness consistency is not checked in production}
+
+The \texttt{ArithmeticCircuitStatement} method \texttt{prove} does not check witness consistency in production.
+This does not affect security, but may be useful (if not sufficiently inefficient) to detect inconsistencies that could arise in production.
+
+
+\subsection{Reused challenge notation}
+
+The implementation's prover derives challenges $y$ and $z$ as specified by the protocol, and uses them to construct exponent vectors $\vec{y}^n$, $\vec{y}^{-n}$, and $\vec{z}_{[1:]}^{Q+1}$.
+However, it reuses the challenge notation, subsequently setting $y := \vec{y}^n$ and $z := \vec{z}_{[1:]}^{Q+1}$.
+
+The verifier uses the notation $x$ to refer both to a vector of challenge exponents and a verifier weighting of the same vector.
+
+This reuse reduces clarity, and should be avoided.
+
+
+\subsection{Polynomial indexing does not match}
+
+When defining indexes for the $\vec{l}$ and $\vec{r}$ polynomials in the implementation, the prover and verifier set (using the notation from the Generalized Bulletproofs technical note) $n' = 2 + 2 \lfloor \frac{n_c}{2} \rfloor$.
+However, the technical note specifies that $n' = 2( n_c + 1 )$ instead.
+Accompanying this change, the implementation only addresses the case where all $\vec{c}_{k,R}$ witness elements and corresponding weighting matrices $W_{k,R}$ vanish for $k \in [1, n_c]$.
+
+This means the implementation is not strictly that of the Generalized Bulletproofs construction, but of a modified version that resembles an earlier version of the technical note that did not admit a correct security proof.
+
+The technical note has since been updated, such that the protocol it presents and proves secure now matches that used in the implementation.
+We caution that the updated security proof has subtle requirements relating to completeness and witness-extended emulation that must be met by any higher-level protocol that uses Generalized Bulletproofs as a subprotocol.
+
+
+\subsection{Reused polynomial notation}
+
+The implementation's prover uses the same notation $l$ and $r$ to refer to both corresponding polynomials $\vec{l}(X)$ and $\vec{r}(X)$, as well as to their challenge evaluations $\vec{l}(x)$ and $\vec{r}(x)$, which can hinder clarity.
+It may be helpful to differentiate the notation.
+
+
+\subsection{Polynomial evaluation is duplicated}
+
+The implementation's prover provides functionality for polynomial evaluation.
+This is used when computing $\vec{l}(x)$ and $\vec{r}(x)$, as well as when computing $\tau_x$.
+Because of the reuse, it may be helpful to refactor this functionality out, which can additionally admit unit testing.
+
+
+\subsection{Denial of service}
+
+The \texttt{ArithmeticCircuitStatement} method \texttt{verify} computes powers of the challenge $x$ immediately after computing this challenge from the transcript.
+Because the transcript is not yet complete, it could be the case that a malicious prover has not supplied subsequent valid transcript elements, which would render the proof invalid.
+
+To avoid a minor denial-of-service, it may be prudent to avoid such computations until the transcript is completed to the extent possible.
+
+
+\subsection{Reused weighting notation}
+
+The implementation's verifier samples two verifier weights, each of which is used for a different verification equation.
+It is important that these be applied correctly.
+However, it uses the same \texttt{verifier\_weight} notation for both, which reduces clarity and could increase future engineering risk.
+
+Separate notation should be considered for this.
+
+
+\subsection{Mismatched index notation}
+
+The implementation's verifier computes scalars associated to the generator vector $\vec{H}'$ using, in part, powers of the (verifier-weighted) challenge $x$ linked to polynomial indexes.
+However, it uses the index $j_{LR}$ in several places where the technical note specifies $i_{LR}$.
+This is trivially correct since $i_{LR} = j_{LR}$ by definition, but could be changed for clarity and consistency.
+
+
+\subsection{Inconsistent verifier accumulation operations}
+
+The implementation's verifier must carefully accumulate scalars associated to common group generators across proofs, in order to perform a subsequent multiscalar multiplication more efficiently. It does so somewhat inconsistently, using \texttt{Add} and \texttt{AddAssign} (or \texttt{Sub} and \texttt{SubAssign}, as appropriate) implementations interchangeably.
+
+All such operations appear to be implemented correctly.
+However, the sensitivity of these operations may warrant more consistent treatment to improve clarity and avoid future errors.
+
+
+\subsection{Possibly confusing verifier naming}
+
+The verification functionality performed by the \texttt{ArithmeticCircuitStatement} method \texttt{verify}, as documented, does not itself perform proof verification; instead, it adds a semantically-valid proof to a batch verifier for later verification.
+
+Despite its documentation, the naming of this method may imply to an implementer that a non-error return indicates a valid proof, the result of which could be catastrophic.
+A more clear name like \texttt{queue} may provide an extra layer of protection against this.
+
+
+\section{\texttt{tests/inner\_product.rs}}
+
+\subsection{Tests lack correct documentation}
+
+The \texttt{test\_zero\_inner\_product} test lacks documentation on the statement and witness corresponding to the proof, which would be useful to improve clarity.
+
+The \texttt{test\_inner\_product} test documentation specifies that it defines $P = \vec{a} \vec{G} + \vec{b} \vec{H}$.
+However, the test actually defines $P = \vec{a} \vec{G} + \vec{b} \vec{H} + \langle \vec{a}, \vec{b} \rangle G$ as required by the inner-product argument (and as noted at the top of the test file).
+This documentation should be corrected.
+
+
+\subsection{No test exercising parameters nontrivially}
+
+The \texttt{test\_inner\_product} test only generates and verifies proofs against statements where \texttt{h\_bold\_weights}, \texttt{u}, and the verifier weight associated to \texttt{P} are set to unit scalars.
+This means nontrivial functionality with respect to these values is not directly tested.
+
+
+\subsection{No test against invalid generator set}
+
+The \texttt{test\_inner\_product} test parameterizes its reduced generator set to check all valid powers of two up to the set limit.
+However, it does not check the failure mode arising from larger sets.
+
+
+\subsection{No tests for malicious transcripts}
+
+There are no tests against malicious transcripts that have been manipulated in any way, to check verifier rejection.
+
+
+\subsection{No tests for mismatched statements}
+
+There are no tests against mismatched statements (represented by differing transcript context), to check verifier rejection.
+
+
+\subsection{No verifier fuzz testing}
+
+There is no fuzz testing of proofs provided to the verifier as byte slices.
+
+Because of the complexity of the verification process, it may be extremely useful to check that fuzzed proofs cannot meaningfully result in panic or other unexpected behavior for a given statement.
+
+
+\section{\texttt{tests/arithmetic\_circuit.rs}}
+
+\subsection{No tests for invalid generator set}
+
+There are no tests against generator sets that are invalid for an associated proof.
+
+
+\subsection{No tests for malicious transcripts}
+
+There are no tests against malicious transcripts that have been manipulated in any way, to check verifier rejection.
+
+
+\subsection{No tests for mismatched statements}
+
+There are no tests against mismatched statements (represented by differing transcript context), to check verifier rejection.
+
+
+\subsection{No tests for batch verification}
+
+There are no tests against nontrivial batch verification, either for correctness or to show that an invalid proof within a batch will result in verifier rejection.
+
+
+\subsection{No verifier fuzz testing}
+
+While the \texttt{fuzz\_test\_arithmetic\_circuit} test generates proofs using random constraints as a form of fuzzing, there is no fuzz testing of proofs provided to the verifier as byte slices.
+
+Because of the complexity of the verification process, it may be extremely useful to check that fuzzed proofs cannot meaningfully result in panic or other unexpected behavior for a given statement.
+
+
+\bibliographystyle{plain}
+\bibliography{main}
+
+
+\end{document}
